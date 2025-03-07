@@ -1,6 +1,8 @@
 local Workspace = cloneref(game:GetService("Workspace"))
 local RunService = cloneref(game:GetService("RunService"))
 local Camera = Workspace.CurrentCamera
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
 
 -- FOV Circles
 local fov_circle_outer = Drawing.new("Circle")
@@ -17,7 +19,17 @@ fov_circle_inner.Color = Color3.fromRGB(144, 238, 144)
 fov_circle_inner.Position = Camera.ViewportSize / 2
 fov_circle_inner.Radius = 85
 
--- Silent Aim Settings
+-- Snaplines
+local snap_line_outer = Drawing.new("Line")
+snap_line_outer.Visible = false
+snap_line_outer.Color = Color3.fromRGB(0, 0, 0)
+snap_line_outer.Thickness = 3
+
+local snap_line_inner = Drawing.new("Line")
+snap_line_inner.Visible = false
+snap_line_inner.Color = Color3.fromRGB(255, 255, 255)
+snap_line_inner.Thickness = 1
+
 local Settings = {
     ["Combat"] = {
         ["Aimbot"] = {
@@ -29,10 +41,25 @@ local Settings = {
     },
 }
 
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
+-- Function to convert world position to screen position
+function to_viewport(pos)
+    if typeof(pos) ~= "Vector3" then return Vector2.zero, false end
+    local point, onScreen = Camera:WorldToViewportPoint(pos)
+    return Vector2.new(point.X, point.Y), onScreen
+end
 
--- Function to get closest enemy in FOV
+-- Function to check if a player is sleeping
+function IsSleeping(Player)
+    local Animations = Player.AnimationController:GetPlayingAnimationTracks()
+    for _, v in pairs(Animations) do
+        if v.IsPlaying and v.Animation.AnimationId == "rbxassetid://13280887764" then
+            return true
+        end
+    end
+    return false
+end
+
+-- Function to get the closest enemy inside the FOV, ignoring sleeping players
 function GetClosestTarget(maxDistance)
     local closestTarget, closestDistance = nil, math.huge
     local viewportCenter = Camera.ViewportSize / 2
@@ -40,15 +67,15 @@ function GetClosestTarget(maxDistance)
     for _, v in pairs(Players:GetPlayers()) do
         if v ~= LocalPlayer and v.Character and v.Character:FindFirstChild("HumanoidRootPart") then
             local head = v.Character:FindFirstChild("Head")
-            local distanceToPlayer = (v.Character.HumanoidRootPart.Position - Camera.CFrame.Position).Magnitude
-
-            if head and distanceToPlayer <= maxDistance then
-                local screenPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
-                local distanceFromCenter = (Vector2.new(screenPoint.X, screenPoint.Y) - viewportCenter).Magnitude
-
-                if onScreen and distanceFromCenter < closestDistance and distanceFromCenter < fov_circle_inner.Radius then
-                    closestTarget = head
-                    closestDistance = distanceFromCenter
+            if head and not IsSleeping(v.Character) then
+                local distanceToPlayer = (v.Character.HumanoidRootPart.Position - Camera.CFrame.Position).Magnitude
+                if distanceToPlayer <= maxDistance then
+                    local screenPoint, onScreen = Camera:WorldToViewportPoint(head.Position)
+                    local distanceFromCenter = (Vector2.new(screenPoint.X, screenPoint.Y) - viewportCenter).Magnitude
+                    if onScreen and distanceFromCenter < closestDistance and distanceFromCenter < fov_circle_inner.Radius then
+                        closestTarget = head
+                        closestDistance = distanceFromCenter
+                    end
                 end
             end
         end
@@ -56,17 +83,42 @@ function GetClosestTarget(maxDistance)
     return closestTarget
 end
 
--- Magic Bullet Hook
+-- Silent Aim (Magic Bullet)
 local oldfromOrientation
 oldfromOrientation = hookfunction(CFrame.fromOrientation, newcclosure(function(p, y, r)
     if debug.info(3, "n") == "fire" then
         local target = GetClosestTarget(1200)
 
         if target then
-            -- Bullet instantly teleports to the enemy's head
+            -- Magic Bullet: Instantly teleport bullets to enemy's head
             return Camera.CFrame:Inverse() * CFrame.lookAt(Camera.CFrame.Position, target.Position)
         end
     end
-
     return oldfromOrientation(p, y, r)
 end))
+
+-- Update Snaplines
+RunService.RenderStepped:Connect(function()
+    local target = GetClosestTarget(1200)
+
+    if target then
+        local targetScreenPosition, onScreen = to_viewport(target.Position)
+
+        if onScreen then
+            snap_line_outer.Visible = true
+            snap_line_inner.Visible = true
+
+            snap_line_outer.From = Camera.ViewportSize / 2
+            snap_line_outer.To = targetScreenPosition
+
+            snap_line_inner.From = Camera.ViewportSize / 2
+            snap_line_inner.To = targetScreenPosition
+        else
+            snap_line_outer.Visible = false
+            snap_line_inner.Visible = false
+        end
+    else
+        snap_line_outer.Visible = false
+        snap_line_inner.Visible = false
+    end
+end)
